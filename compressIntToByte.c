@@ -10,12 +10,13 @@
 #include <string.h>
 
 /*
-  defines a byte as a mantissa of (4 + 1) bits and shift of 4 bits
+  defines a byte (unsigned char) as a shift of 4 bits and a mantissa of (4 + 1) bits
    (additional 1 bit is a hidden leading bit as defined by IEEE 754 for floats)
   encodes values from 0 to 516,095 with a 3 % accuracy (1/32)
   encoding scheme:
    shift is 0 -> mantissa
    otherwise  -> (0x10 + mantissa) << (shift - 1)
+  shift is encoded as bits b7 to b4 in byte and mantissa as bits b3 to b0
   here is a table of the decoded values for mantissa from 0 to 15 (in columns)
   and shift values from 0 to 15 (in lines)
    sh:0       0      1      2      3      4      5      6      7      8      9     10     11     12     13     14     15
@@ -38,6 +39,12 @@
 
  */
 
+/*
+ * compress unsigned long ulVal to a byte and returns this byte
+ * pResult is not NULL its dereference is not 0 if result is within limits
+ *  or 0 if uVal is too big and cannot be encoded correctly
+ * note: this compression is done with rounding
+ */
 unsigned char compressIntToByte(unsigned long ulVal, int* pResult)
 {
   const unsigned long cMax = 31ul<<14 | ((1<<13)-1);
@@ -51,7 +58,7 @@ unsigned char compressIntToByte(unsigned long ulVal, int* pResult)
      break;
    }
    if(i<=4)
-    return((unsigned char)(ulVal<<4) | (i==4 ? 1 : 0));
+    return((unsigned char)(ulVal | (i==4 ? 0x10 : 0)));
    bVal = (unsigned char)(ulVal>>(i-5));
    if(bVal&1) {
     bVal++;
@@ -59,91 +66,98 @@ unsigned char compressIntToByte(unsigned long ulVal, int* pResult)
    if(bVal&(1<<6)) {
      i++;
    }
-   return((bVal<<3) | (i-3));
+   return((unsigned char)(((bVal>>1)&15) | ((i-3)<<4)));
   }
   if(pResult!=NULL)
    *pResult = 0;
   return(255);
 }
 
-
+/*
+ * uncompress byte ucVal and return it as a result
+ */
 unsigned long uncompressByteToInt(unsigned char ucVal)
 {
-  const int shift = ucVal&0xf;
-  const int mantissa = ucVal>>4;
+  const int shift = ucVal>>4;
+  const int mantissa = ucVal&0x0f;
   if(shift>0) {
    return(((unsigned long)(0x10+mantissa))<<(shift-1));
   }
   return(mantissa);
 }
 
-/*
+/***************************************************
  * tests
- */
+ **************************************************/
 
+/* define element of test vector */
 typedef struct _compressIntToByteTestVect{
-    unsigned long input;
-    unsigned char compressed;
-    unsigned long uncompressed;
-    int compressResult;
+    unsigned long input; /* value to compress */
+    unsigned char compressed; /* compressed value */
+    unsigned long uncompressed; /* uncompress value of the compress value */
+    int compressResult; /* store result of compression */
 } tCompressIntToByteTestVect;
 
 tCompressIntToByteTestVect testVectors[] = {
   {0ul, 0, 0ul, 1},
-  {5ul, 0x50, 5, 1},
-  {16ul, 0x01, 16ul, 1},
-  {30ul, 0xe1, 30, 1},
-  {32ul, 0x02, 32ul, 1},
-  {33ul, 0x12, 34ul, 1},
-  {40ul, 0x42, 40, 1},
-  {41ul, 0x52, 42, 1},
-  {80ul, 0x43, 80ul, 1},
-  {85ul, 0x53, 84ul, 1},
-  {86ul, 0x63, 88ul, 1},
-  {95ul, 0x83, 96ul, 1},
-  {100ul, 0x93, 100, 1},
-  {187ul, 0x74, 184, 1},
-  {188ul, 0x84, 192, 1},
-  {252ul, 0x05, 256, 1},
-  {687ul, 0x56, 672ul, 1},
+  {5ul, 0x05, 5, 1},
+  {16ul, 0x10, 16ul, 1},
+  {30ul, 0x1e, 30, 1},
+  {32ul, 0x20, 32ul, 1},
+  {33ul, 0x21, 34ul, 1},
+  {40ul, 0x24, 40, 1},
+  {41ul, 0x25, 42, 1},
+  {80ul, 0x34, 80ul, 1},
+  {85ul, 0x35, 84ul, 1},
+  {86ul, 0x36, 88ul, 1},
+  {95ul, 0x38, 96ul, 1},
+  {100ul, 0x39, 100, 1},
+  {187ul, 0x47, 184, 1},
+  {188ul, 0x48, 192, 1},
+  {252ul, 0x50, 256, 1},
+  {687ul, 0x65, 672ul, 1},
   {688ul, 0x66, 704ul, 1},
   {704ul, 0x66, 704ul, 1},
-  {750ul, 0x76, 736ul, 1},
-  {1024ul, 0x07, 1024ul, 1},
-  {1055ul, 0x07, 1024ul, 1},
-  {1059ul, 0x17, 1088ul, 1},
-  {1059ul, 0x17, 1088ul, 1},
+  {750ul, 0x67, 736ul, 1},
+  {1024ul, 0x70, 1024ul, 1},
+  {1055ul, 0x70, 1024ul, 1},
+  {1059ul, 0x71, 1088ul, 1},
+  {1059ul, 0x71, 1088ul, 1},
   {1472ul, 0x77, 1472ul, 1},
-  {1504ul, 0x87, 1536ul, 1},
-  {3967ul, 0xf8, 3968ul, 1},
-  {4031ul, 0xf8, 3968ul, 1},
+  {1504ul, 0x78, 1536ul, 1},
+  {3967ul, 0x8f, 3968ul, 1},
+  {4031ul, 0x8f, 3968ul, 1},
   {6400ul, 0x99, 6400ul, 1},
-  {10200ul, 0x4a, 10240ul, 1},
-  {10700ul, 0x5a, 10752ul, 1},
-  {24100ul, 0x8b, 24576ul, 1},
-  {47120ul, 0x7c, 47104ul, 1},
-  {48144ul, 0x8c, 49152ul, 1},
-  {64511ul, 0xfc, 63488ul, 1},
-  {64512ul, 0x0d, 65536ul, 1},
-  {65408ul, 0x0d, 65536, 1},
-  {88000ul, 0x5d, 86016ul, 1},
-  {88120ul, 0x6d, 90112ul, 1},
+  {10200ul, 0xa4, 10240ul, 1},
+  {10700ul, 0xa5, 10752ul, 1},
+  {24100ul, 0xb8, 24576ul, 1},
+  {47120ul, 0xc7, 47104ul, 1},
+  {48144ul, 0xc8, 49152ul, 1},
+  {64511ul, 0xcf, 63488ul, 1},
+  {64512ul, 0xd0, 65536ul, 1},
+  {65408ul, 0xd0, 65536, 1},
+  {88000ul, 0xd5, 86016ul, 1},
+  {88120ul, 0xd6, 90112ul, 1},
   {120000ul, 0xdd, 118784ul, 1},
   {120831ul, 0xdd, 118784ul, 1},
-  {120832ul, 0xed, 122880ul, 1},
-  {333333ul, 0x4f, 327680ul, 1},
-  {335871ul, 0x4f, 327680ul, 1},
-  {335872ul, 0x5f, 344064ul, 1},
-  {425985ul, 0xaf,425984ul, 1},
-  {482345ul, 0xdf,475136ul, 1},
+  {120832ul, 0xde, 122880ul, 1},
+  {333333ul, 0xf4, 327680ul, 1},
+  {335871ul, 0xf4, 327680ul, 1},
+  {335872ul, 0xf5, 344064ul, 1},
+  {425985ul, 0xfa,425984ul, 1},
+  {482345ul, 0xfd,475136ul, 1},
   {507904ul, 0xff, 507904ul, 1},
   {507905ul, 0xff, 507904ul, 1},
   {516095ul, 0xff, 507904ul, 1},
   {516096ul, 0xff, 507904ul, 0},
-  {0xfffffffful, 255, 507904ul, 0},
+  {0xfffffffful, 0xff, 507904ul, 0},
 };
 
-void test_compressIntToByte(void)
+/*
+ * run tests
+ *  returns a non 0 value if all tests passed, 0 otherwise
+ */
+int test_compressIntToByte(void)
 {
   const int nbTests =sizeof(testVectors)/sizeof(*testVectors);
   int i, nbFailures=0;
@@ -172,24 +186,29 @@ void test_compressIntToByte(void)
    }
   }
   printf("test_compressIntToByteTable: %i steps: %i failure%s\n", nbTests, nbFailures, nbFailures!=1?"s":"");
+  return(nbFailures>0);
 }
 
+/*
+ * builds a table on stdout to present all the 256 decoded values
+ */
 void test_makeCompressIntToByteTable(void)
 {
   int i, j;
   for(j=0; j<16; j++){
    printf("shift:%-2i", j);
    for(i=0; i<16; i++) {
-    printf(" %6lu", uncompressByteToInt((unsigned char)((i<<4)+j)));
+    printf(" %6lu", uncompressByteToInt((unsigned char)((j<<4)+i)));
    }
+   printf("\n");
   }
-  printf("\n");
 }
 
 int main(void)
 {
  unsigned long val;
  unsigned char byt;
+ int result;
  int again=1;
  char str[256];
  setvbuf(stdout, NULL, _IONBF, 0);
@@ -199,10 +218,13 @@ int main(void)
      scanf("%s", str);
      if(!strcmp(str, "quit"))
       again=0;
+     if(!strcmp(str, "table")){
+      test_makeCompressIntToByteTable();
+     }
      else {
        val=atol(str);
-       byt = compressIntToByte(val, NULL);
-       printf("{%luul, 0x%02x, %luul, 1},\n", val, (int)byt, uncompressByteToInt(byt));
+       byt = compressIntToByte(val, &result);
+       printf("{%luul, 0x%02x, %luul, %i},\n", val, (int)byt, uncompressByteToInt(byt), result);
      }
  } while(again);
  printf("bye!\n");
