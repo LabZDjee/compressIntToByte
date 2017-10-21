@@ -218,7 +218,7 @@ int main(void)
      scanf("%s", str);
      if(!strcmp(str, "quit"))
       again=0;
-     if(!strcmp(str, "table")){
+     else if(!strcmp(str, "table")){
       test_makeCompressIntToByteTable();
      }
      else {
